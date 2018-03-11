@@ -38,7 +38,7 @@ extern string  Header1="----------Trading Rules Variables-----------";
 extern bool    StartTradeHour08=TRUE;
 extern bool    StartTradeHour16=TRUE;
 extern bool    StartTradeHour24=TRUE;
-extern int     TradeMaxDurationHrs=8;
+extern int     TradeMaxDurationHrs=7;
 
 extern string  Header2="----------Position Sizing Settings-----------";
 extern string  Lot_explanation="If IsSizingOn = true, Lots variable will be ignored";
@@ -145,7 +145,7 @@ string  InternalHeader3="----------Decision Support Variables-----------";
 bool     TradeAllowed = true; 
 bool FlagBuy, FlagSell;       //boolean flags to limit direction of trades
 datetime ReferenceTime;       //used for order history
-int Direction, DirectionNews; //used for trading entry from Sentiment Analysis 
+int DirectionNews;            //used for trading entry from Sentiment Analysis 
 
 //+------------------------------------------------------------------+
 //| End of Setup                                          
@@ -218,21 +218,21 @@ int deinit()
 int start()
   {
   
-  //interesting way to only execute code on ever new bar!!!
-   if(!isNewBar())return(0);
+  //only execute code on ever new bar!!!
+  if(!isNewBar())return(0);
    
 //----------Order management through R - to avoid slow down the system only enable with external parameters
    if(R_Management)
      {
          //code that only executed once a bar
-         Direction = -1; //set direction to -1 by default in order to achieve cross!
          OrderProfitToCSV(T_Num(MagicNumber));                        //write previous orders profit results for auto analysis in R
          TradeAllowed = ReadCommandFromCSV(MagicNumber);              //read command from R to make sure trading is allowed
          DirectionNews = ReadSentiment(Symbol(), -1);             //get prediction from R for trade direction         
-        
        
      }
 //----------Variables to be Refreshed-----------
+   //added generic comment
+   Comment("MagicNum: " + (string)MagicNumber + " time to exit order: "+timeexit);
 
    OrderNumber=0; // OrderNumber used in Entry Rules
 
@@ -242,27 +242,10 @@ int start()
    if(DirectionNews == 1) {FlagSell= True; FlagBuy = False;}
    if(DirectionNews == -1){FlagBuy = False;FlagSell= False;}
    
-   // checking if this is the time to trade
-   if(StartTradeHour08 && Hour() == 8)
-     {
-      //check the cross
-      //using fucntion CrossTriggered1 to create trading entry
-      CrossTriggered1=Crossed1(Direction,DirectionNews);
-     }
-     
-   if(StartTradeHour16 && Hour() == 16)
-     {
-      //check the cross
-      //using fucntion CrossTriggered1 to create trading entry
-      CrossTriggered1=Crossed1(Direction,DirectionNews);
-     }  
-
-   if(StartTradeHour24 && Hour() == 0)
-     {
-      //check the cross
-      //using fucntion CrossTriggered1 to create trading entry
-      CrossTriggered1=Crossed1(Direction,DirectionNews);
-     } 
+   // checking if this is the time to trade (not using function Crossed1)
+   if(StartTradeHour08 && Hour() == 9 && DirectionNews != -1)  CrossTriggered1=2; //fresh news sentiment are delivered 07:50 CET 08:50 Broker/Server Time
+   if(StartTradeHour16 && Hour() == 17 && DirectionNews != -1) CrossTriggered1=2;
+   if(StartTradeHour24 && Hour() == 1 && DirectionNews != -1)  CrossTriggered1=2;
 
    //CrossTriggered2=Crossed2(Ask,KeltnerUpper1);
    //CrossTriggered3=Crossed3(Bid,KeltnerLower1);
