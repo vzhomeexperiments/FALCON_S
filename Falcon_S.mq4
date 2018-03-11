@@ -7,6 +7,8 @@
 #include <02_OrderProfitToCSV.mqh>
 #include <03_ReadCommandFromCSV.mqh>
 #include <08_TerminalNumber.mqh>
+#include <10_isNewBar.mqh>
+#include <11_ReadSentiment.mqh>
 
 #property copyright "Copyright 2015, Black Algo Technologies Pte Ltd"
 #property copyright "Copyright 2018, Vladimir Zhbanko"
@@ -33,10 +35,10 @@ extern bool    IsECNbroker = false; // Is your broker an ECN
 extern bool    OnJournaling = true; // Add EA updates in the Journal Tab
 
 extern string  Header1="----------Trading Rules Variables-----------";
-extern int     FastMAPeriod=10;
-extern int     SlowMAPeriod=40;
-extern int     KeltnerPeriod=15;
-extern int     KeltnerMulti=3;
+extern bool    StartTradeHour08=TRUE;
+extern bool    StartTradeHour16=TRUE;
+extern bool    StartTradeHour24=TRUE;
+extern int     TradeMaxDurationHrs=8;
 
 extern string  Header2="----------Position Sizing Settings-----------";
 extern string  Lot_explanation="If IsSizingOn = true, Lots variable will be ignored";
@@ -49,7 +51,7 @@ extern string  Header3="----------TP & SL Settings-----------";
 extern bool    UseFixedStopLoss=True; // If this is false and IsSizingOn = True, sizing algo will not be able to calculate correct lot size. 
 extern double  FixedStopLoss=0; // Hard Stop in Pips. Will be overridden if vol-based SL is true 
 extern bool    IsVolatilityStopOn=True;
-extern double  VolBasedSLMultiplier=3; // Stop Loss Amount in units of Volatility
+extern double  VolBasedSLMultiplier=6; // Stop Loss Amount in units of Volatility
 
 extern bool    UseFixedTakeProfit=True;
 extern double  FixedTakeProfit=0; // Hard Take Profit in Pips. Will be overridden if vol-based TP is true 
@@ -127,8 +129,8 @@ double myATR;
 double FastMA1, SlowMA1, Price1;
 
 // TDL 3: Declaring Variables (and the extern variables above)
+datetime timeexit;
 
-double KeltnerUpper1, KeltnerLower1;
 int CrossTriggered1, CrossTriggered2, CrossTriggered3;
 
 int OrderNumber;
@@ -141,7 +143,9 @@ double HiddenVolTrailingList[][3]; // First dimension is for position ticket num
 
 string  InternalHeader3="----------Decision Support Variables-----------";
 bool     TradeAllowed = true; 
+bool FlagBuy, FlagSell;       //boolean flags to limit direction of trades
 datetime ReferenceTime;       //used for order history
+int Direction, DirectionNews; //used for trading entry from Sentiment Analysis 
 
 //+------------------------------------------------------------------+
 //| End of Setup                                          
@@ -214,14 +218,17 @@ int deinit()
 int start()
   {
   
+  //interesting way to only execute code on ever new bar!!!
+   if(!isNewBar())return(0);
+   
 //----------Order management through R - to avoid slow down the system only enable with external parameters
    if(R_Management)
      {
          //code that only executed once a bar
-      //   Direction = -1; //set direction to -1 by default in order to achieve cross!
+         Direction = -1; //set direction to -1 by default in order to achieve cross!
          OrderProfitToCSV(T_Num(MagicNumber));                        //write previous orders profit results for auto analysis in R
          TradeAllowed = ReadCommandFromCSV(MagicNumber);              //read command from R to make sure trading is allowed
-      //   Direction = ReadAutoPrediction(MagicNumber, -1);             //get prediction from R for trade direction         
+         DirectionNews = ReadSentiment(Symbol(), -1);             //get prediction from R for trade direction         
         
        
      }
@@ -230,18 +237,35 @@ int start()
    OrderNumber=0; // OrderNumber used in Entry Rules
 
 //----------Entry & Exit Variables-----------
+   // buy or sell direction?
+   if(DirectionNews == 0) {FlagBuy = True; FlagSell= False;}
+   if(DirectionNews == 1) {FlagSell= True; FlagBuy = False;}
+   if(DirectionNews == -1){FlagBuy = False;FlagSell= False;}
+   
+   // checking if this is the time to trade
+   if(StartTradeHour08 && Hour() == 8)
+     {
+      //check the cross
+      //using fucntion CrossTriggered1 to create trading entry
+      CrossTriggered1=Crossed1(Direction,DirectionNews);
+     }
+     
+   if(StartTradeHour16 && Hour() == 16)
+     {
+      //check the cross
+      //using fucntion CrossTriggered1 to create trading entry
+      CrossTriggered1=Crossed1(Direction,DirectionNews);
+     }  
 
-   FastMA1=iMA(Symbol(),Period(),FastMAPeriod,0, MODE_SMA, PRICE_CLOSE,1); // Shift 1
-   SlowMA1=iMA(Symbol(),Period(),SlowMAPeriod,0, MODE_SMA, PRICE_CLOSE,1); // Shift 1
-   
-   // TDL 1: Assigning Values to Variables
-   
-   KeltnerUpper1 = iCustom(NULL, 0, "Keltner_Channels", KeltnerPeriod, 0, 0, KeltnerPeriod, KeltnerMulti, True, 0, 1); // Shift 1
-   KeltnerLower1 = iCustom(NULL, 0, "Keltner_Channels", KeltnerPeriod, 0, 0, KeltnerPeriod, KeltnerMulti, True, 2, 1); // Shift 1
-   
-   CrossTriggered1=Crossed1(FastMA1,SlowMA1);
-   CrossTriggered2=Crossed2(Ask,KeltnerUpper1);
-   CrossTriggered3=Crossed3(Bid,KeltnerLower1);
+   if(StartTradeHour24 && Hour() == 0)
+     {
+      //check the cross
+      //using fucntion CrossTriggered1 to create trading entry
+      CrossTriggered1=Crossed1(Direction,DirectionNews);
+     } 
+
+   //CrossTriggered2=Crossed2(Ask,KeltnerUpper1);
+   //CrossTriggered3=Crossed3(Bid,KeltnerLower1);
 
 //----------TP, SL, Breakeven and Trailing Stops Variables-----------
 
@@ -288,12 +312,12 @@ int start()
 
    // TDL 2: Setting up Exit rules. Modify the ExitSignal() function to suit your needs.
 
-   if(CountPosOrders(MagicNumber,OP_BUY)>=1 && ExitSignal(CrossTriggered3)==2)
+   if(CountPosOrders(MagicNumber,OP_BUY)>=1 && TimeCurrent() > timeexit)
      { // Close Long Positions
       CloseOrderPosition(OP_BUY, OnJournaling, MagicNumber, Slippage, P, RetryInterval); 
 
      }
-   if(CountPosOrders(MagicNumber,OP_SELL)>=1 && ExitSignal(CrossTriggered2)==1)
+   if(CountPosOrders(MagicNumber,OP_SELL)>=1 && TimeCurrent() > timeexit)
      { // Close Short Positions
       CloseOrderPosition(OP_SELL, OnJournaling, MagicNumber, Slippage, P, RetryInterval);
      }
@@ -304,7 +328,7 @@ int start()
       if(IsVolLimitBreached(IsVolLimitActivated,VolatilityMultiplier,ATRTimeframe,ATRPeriod)==False)
          if(IsMaxPositionsReached(MaxPositionsAllowed,MagicNumber,OnJournaling)==False)
            {
-            if(TradeAllowed && EntrySignal(CrossTriggered1)==1)
+            if(TradeAllowed && EntrySignal(CrossTriggered1)==2 && FlagBuy)
               { // Open Long Positions
                OrderNumber=OpenPositionMarket(OP_BUY,GetLot(IsSizingOn,Lots,Risk,YenPairAdjustFactor,Stop,P),Stop,Take,MagicNumber,Slippage,OnJournaling,P,IsECNbroker,MaxRetriesPerTick,RetryInterval);
    
@@ -319,10 +343,13 @@ int start()
                
                // Set Hidden Volatility Trailing Stop Level 
                if(UseHiddenVolTrailing) SetHiddenVolTrailing(OnJournaling,myATR,VolTrailingDistMultiplier_Hidden,MagicNumber,P,OrderNumber);
-             
+               
+               // Define Time-based Exit
+			      
+               timeexit = TimeCurrent() + TradeMaxDurationHrs * Period()*60; // Multiply by 60 to convert to seconds
               }
    
-            if(TradeAllowed && EntrySignal(CrossTriggered1)==2)
+            if(TradeAllowed && EntrySignal(CrossTriggered1)==2 && FlagSell)
               { // Open Short Positions
                OrderNumber=OpenPositionMarket(OP_SELL,GetLot(IsSizingOn,Lots,Risk,YenPairAdjustFactor,Stop,P),Stop,Take,MagicNumber,Slippage,OnJournaling,P,IsECNbroker,MaxRetriesPerTick,RetryInterval);
    
@@ -337,7 +364,10 @@ int start()
                 
                // Set Hidden Volatility Trailing Stop Level  
                if(UseHiddenVolTrailing) SetHiddenVolTrailing(OnJournaling,myATR,VolTrailingDistMultiplier_Hidden,MagicNumber,P,OrderNumber);
-             
+               
+               // Define Time-based Exit
+			      
+               timeexit = TimeCurrent() + TradeMaxDurationHrs * Period()*60; // Multiply by 60 to convert to seconds
               }
            }
 
